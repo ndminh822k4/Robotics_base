@@ -234,7 +234,7 @@ Q = np.block([
 MPC = MPCController(
     M0=M,
     Q=Q,
-    R=np.array([0.05, 0.05, 0.05, 0.005, 0.01, 0.05]),
+    R=np.array([0.05, 0.005, 0.005, 0.05, 0.01, 0.05]),
     N=10,
     dt=0.01,
     torque_limit=None
@@ -244,10 +244,7 @@ MPC = MPCController(
 # ============================================================
 # 9. SIMULATION PARAMETERS
 # ============================================================
-dt_sim = model.opt.timestep
-print("\nMuJoCo timestep:")
-print(dt_sim)
-
+model.opt.timestep = 0.01
 # ============================================================
 # 9b. GRAVITY & CONTROLLER TOGGLE (bật/tắt bằng phím tắt)
 # ============================================================
@@ -384,7 +381,7 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
     base_ngeom = viewer.user_scn.ngeom
     ee_path = []
 
-    model.opt.timestep = dt_sim  # đảm bảo timestep mô phỏng đúng với dt_sim
+    dt_sim = model.opt.timestep  # đảm bảo timestep mô phỏng đúng với dt_sim
 
     # RESET ROBOT
     data.qpos[:6] = q_start

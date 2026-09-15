@@ -20,7 +20,7 @@ sys.path.append(KINEMATIC_DIR)
 
 from Forward import forward_kinematics
 from Reverse_quat import DLS_quaternion
-from Control_function.NonMPC import NMPCController
+from Control_function.Non_MPC2 import NMPCController
 
 # ============================================================
 # 2. LOAD MUJOCO MODEL
@@ -223,7 +223,7 @@ M = np.zeros((model.nu, model.nu))
 mujoco.mj_fullM(model, data, M)
 
 M_start = M[:6, :6]
-Q_pos = np.diag([1000, 4000, 3000, 500, 600, 550])
+Q_pos = np.diag([1000, 8000, 8000, 1000, 600, 900])
 Q_vel = np.diag(np.full(6, 5.0))
 
 Q = np.block([
@@ -243,9 +243,6 @@ NMPC_DT = 0.01
 # ============================================================
 # 9. SIMULATION PARAMETERS
 # ============================================================
-dt_sim = model.opt.timestep
-print("\nMuJoCo timestep:")
-print(dt_sim)
 
 # ============================================================
 # 9b. GRAVITY & CONTROLLER TOGGLE (bật/tắt bằng phím tắt)
@@ -367,7 +364,16 @@ MPC = NMPCController(
     N=NMPC_N,
     dt=NMPC_DT,
     torque_limit=nmpc_u_max,
+    maxiter=50,
 )
+
+# Không giải lại NMPC ở MỌI bước mô phỏng (dt_sim của MuJoCo thường nhỏ
+# hơn nhiều so với dt=0.01 của NMPC) -> chỉ giải lại mỗi NMPC_EVERY bước
+# mô phỏng, các bước ở giữa dùng lại torque cũ. Giảm số này nếu cần bám
+# sát hơn (đổi lại chậm hơn), tăng lên nếu vẫn còn giật/đứng hình.
+NMPC_EVERY = 5
+_nmpc_step_counter = 0
+_nmpc_last_torque = np.zeros(6)
 
 # ============================================================
 # 12. OPEN VIEWER
@@ -395,6 +401,7 @@ live_plot_proc = mp_ctx.Process(
 live_plot_proc.start()
 print(f"[INFO] Đã mở process vẽ live (PID={live_plot_proc.pid}) — cửa sổ 'Live Monitor'.")
 
+model.opt.timestep = 0.003
 with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
 
     # VẼ ĐIỂM START / TARGET
@@ -403,7 +410,7 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
     base_ngeom = viewer.user_scn.ngeom
     ee_path = []
 
-    model.opt.timestep = dt_sim  # đảm bảo timestep mô phỏng đúng với dt_sim
+    dt_sim = model.opt.timestep  # đảm bảo timestep mô phỏng đúng với dt_sim
 
     # RESET ROBOT
     data.qpos[:6] = q_start
@@ -453,12 +460,19 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
         bias = data.qfrc_bias[:6].copy()
 
         if controller_state["enabled"]:
-            torque = MPC.compute(
-                q_des=q_final,
-                q_current=q_current,
-                dq_des=np.zeros(6),
-                dq_current=dq_current
-            )
+            # Chỉ giải lại NMPC mỗi NMPC_EVERY bước mô phỏng (giải NLP mỗi
+            # bước là quá nặng); các bước ở giữa dùng lại torque vừa tính,
+            # vẫn đúng tinh thần receding horizon (chỉ là "recede" chậm hơn
+            # 1 bước dt_sim).
+            if _nmpc_step_counter % NMPC_EVERY == 0:
+                _nmpc_last_torque = MPC.compute(
+                    q_des=q_final,
+                    q_current=q_current,
+                    dq_des=np.zeros(6),
+                    dq_current=dq_current
+                )
+            _nmpc_step_counter += 1
+            torque = _nmpc_last_torque
 
             # Chia theo tỉ số truyền actuator (gear=1 thì không đổi gì) rồi mới
             # clip theo giới hạn phần cứng thật (đã tính đúng ở bước 11, có xét
@@ -607,10 +621,10 @@ def compute_step_response_metrics(t, log_q_error, log_controller_on, q_final,
         # --- Overshoot (%) so với biên độ bước nhảy |delta| ---
         if delta > 0:
             peak = np.max(resp)
-            overshoot_pct = max(0.0, (peak - q_final[j]) / delta * 100.0)
+            overshoot_pct = abs((peak - q_final[j]) / delta * 100.0)
         else:
             peak = np.min(resp)
-            overshoot_pct = max(0.0, (q_final[j] - peak) / (-delta) * 100.0)
+            overshoot_pct = abs((q_final[j] - peak) / (-delta) * 100.0)
 
         metrics.append({"rise_time": rise_time, "settling_time": settling_time,
                          "overshoot_pct": overshoot_pct, "delta": delta})
