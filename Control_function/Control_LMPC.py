@@ -22,6 +22,7 @@ from Forward import forward_kinematics
 from Reverse_quat import DLS_quaternion
 from Control_function.Non_MPC2 import NMPCController
 from learned_dynamics import load_learned_dynamics
+from Hybrid_dynamics import HybridDynamics
 
 # ============================================================
 # 2. LOAD MUJOCO MODEL
@@ -203,16 +204,6 @@ data.qvel[:6] = 0.0
 mujoco.mj_forward(model, data)
 mujoco_start = data.site_xpos[site_id].copy()
 
-print("\n========================================")
-print("INITIAL STATE")
-print("========================================")
-print("\nMuJoCo EE:")
-print(mujoco_start)
-print("\nExpected start:")
-print(P_start)
-print("\nPosition error:")
-print(mujoco_start - P_start)
-
 # ============================================================
 # 8. LQR PARAMETERS (thay cho Kp/Kd/Ki của PID)
 # ============================================================
@@ -380,7 +371,7 @@ MPC = NMPCController(
 #
 # Đặt USE_LEARNED_DYNAMICS = False để quay lại MuJoCo thật (vd để so
 # sánh bám điểm/độ trễ giữa 2 bản, hoặc khi chưa có/chưa tin dyn_model.npz).
-USE_LEARNED_DYNAMICS = False
+USE_LEARNED_DYNAMICS = True
 DYN_MODEL_PATH = "Control_function/dyn_model (1).npz"  # đổi đường dẫn nếu để nơi khác
 
 if USE_LEARNED_DYNAMICS:
@@ -392,8 +383,13 @@ if USE_LEARNED_DYNAMICS:
         print(f"\n[CẢNH BÁO] Không tìm thấy {DYN_MODEL_PATH} -> NMPC vẫn dùng "
               f"động lực học MuJoCo thật (make_mujoco_dynamics_func mặc định).")
 else:
-    print("\n[INFO] NMPC đang dùng động lực học MuJoCo thật (mặc định).")
-
+    hybrid = HybridDynamics(
+    mlp_path="dyn_model.npz",
+    window_size=200,      # nhớ tối đa 200 điểm residual gần nhất
+    retrain_every=5,      # refit GP mỗi 5 điểm mới (tiết kiệm tính toán)
+    min_points_to_fit=15, # dưới 15 điểm thì dùng thuần MLP
+)
+    
 # Không giải lại NMPC ở MỌI bước mô phỏng (dt_sim của MuJoCo thường nhỏ
 # hơn nhiều so với dt=0.01 của NMPC) -> chỉ giải lại mỗi NMPC_EVERY bước
 # mô phỏng, các bước ở giữa dùng lại torque cũ. Giảm số này nếu cần bám
